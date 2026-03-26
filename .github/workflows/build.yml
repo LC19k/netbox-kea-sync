@@ -23,5 +23,5 @@ jobs:
       with:
         context: .
         push: true
-        tags: |
-          ghcr.io/lc19k/netbox-kea-sync:latest
+        tags: ghcr.io/lc19k/netbox-kea-sync:latest
+        github-token: ""
