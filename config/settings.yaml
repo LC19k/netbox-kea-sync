@@ -1,0 +1,9 @@
+netbox:
+  url: "http://netbox:8000"
+  token: "REPLACE_ME"
+
+kea:
+  url: "http://kea-ctrl-agent:8000"
+
+webhook:
+  secret: "REPLACE_ME"
