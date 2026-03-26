@@ -16,7 +16,7 @@ jobs:
       with:
         registry: ghcr.io
         username: lc19k
-        password: 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
+        password: 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
 
     - name: Build and push
       uses: docker/build-push-action@v5
