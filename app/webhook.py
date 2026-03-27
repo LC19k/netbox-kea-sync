@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Header, HTTPException, Request
 import hashlib
+import hmac
 
 from .settings import settings
 from .models import WebhookEvent
@@ -22,7 +23,7 @@ async def webhook(
     # NetBox CE (Docker 4.0.2) uses SHA-512(body)
     expected_digest = hashlib.sha512(raw_body).hexdigest()
 
-    if not hashlib.compare_digest(x_hook_signature, expected_digest):
+    if not hmac.compare_digest(x_hook_signature, expected_digest):
         raise HTTPException(status_code=401, detail="Invalid signature")
 
     event = WebhookEvent(**(await request.json()))
