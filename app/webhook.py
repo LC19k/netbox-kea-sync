@@ -13,6 +13,7 @@ async def webhook(
     request: Request,
     x_webhook_signature: str = Header(None, alias="X-Webhook-Signature")
 ):
+    print("HEADERS:", dict(request.headers))
     raw_body = await request.body()
 
     # NetBox sends: sha256=<digest>
