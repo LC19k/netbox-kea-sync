@@ -26,7 +26,7 @@ async def webhook(
     expected_digest = hmac.new(
         key=settings.webhook_secret.encode(),
         msg=raw_body,
-        digestmod=hashlib.sha256
+        digestmod=hashlib.sha512
     ).hexdigest()
 
     if not hmac.compare_digest(sent_digest, expected_digest):
