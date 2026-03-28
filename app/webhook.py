@@ -29,24 +29,19 @@ async def webhook(
         print("RAW BODY HEX:", raw_body.hex())
 
     # ------------------------------------------------------------
-    # MODE A: NetBox CE / Legacy Mode
+    # MODE A: NetBox 2.7 Legacy Mode
     # Header: X-Hook-Signature
-    # Value: sha512(pretty_printed_sorted_json)
+    # Value: HMAC-SHA512(secret, raw_body)
     # ------------------------------------------------------------
     if x_hook_signature:
-        try:
-            parsed = json.loads(raw_body)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid JSON body")
+        if not settings.webhook_secret:
+            raise HTTPException(status_code=500, detail="WEBHOOK_SECRET not configured")
 
-        # Reconstruct EXACTLY what NetBox CE signs internally
-        canonical = json.dumps(
-            parsed,
-            indent=4,          # NetBox CE uses pretty-printed JSON
-            sort_keys=True     # NetBox CE sorts keys before hashing
-        ).encode()
-
-        expected = hashlib.sha512(canonical).hexdigest()
+        expected = hmac.new(
+            key=settings.webhook_secret.encode(),
+            msg=raw_body,
+            digestmod=hashlib.sha512,
+        ).hexdigest()
 
         if not hmac.compare_digest(x_hook_signature, expected):
             raise HTTPException(status_code=401, detail="Invalid legacy signature")
