@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Header, HTTPException, Request
 import hashlib
 import hmac
+import json
 import os
 
 from .settings import settings
@@ -9,7 +10,7 @@ from .sync import sync_reservations
 
 router = APIRouter()
 
-# Optional debug toggle (set WEBHOOK_DEBUG=1 in env to enable hex dump)
+# Enable hex-dump debugging with WEBHOOK_DEBUG=1
 DEBUG = os.getenv("WEBHOOK_DEBUG", "0") == "1"
 
 
@@ -28,20 +29,30 @@ async def webhook(
         print("RAW BODY HEX:", raw_body.hex())
 
     # ------------------------------------------------------------
-    # MODE A: Legacy / NetBox CE style
+    # MODE A: NetBox CE / Legacy Mode
     # Header: X-Hook-Signature
-    # Value: sha512(body)
+    # Value: sha512(canonical_json)
     # ------------------------------------------------------------
     if x_hook_signature:
-        expected = hashlib.sha512(raw_body).hexdigest()
+        try:
+            parsed = json.loads(raw_body)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+        # Canonical JSON encoding (matches NetBox CE signing)
+        canonical = json.dumps(parsed, separators=(",", ":"), sort_keys=True).encode()
+
+        expected = hashlib.sha512(canonical).hexdigest()
+
         if not hmac.compare_digest(x_hook_signature, expected):
             raise HTTPException(status_code=401, detail="Invalid legacy signature")
+
         return await handle_event(request)
 
     # ------------------------------------------------------------
-    # MODE B: Modern HMAC mode (NetBox 4.x+)
+    # MODE B: Modern HMAC Mode (NetBox 4.x+)
     # Header: X-Webhook-Signature
-    # Value: sha256=<hmac(secret, body)>
+    # Value: sha256=<hmac(secret, raw_body)>
     # ------------------------------------------------------------
     if x_webhook_signature:
         if not x_webhook_signature.startswith("sha256="):
