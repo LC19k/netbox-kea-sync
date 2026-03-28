@@ -31,7 +31,7 @@ async def webhook(
     # ------------------------------------------------------------
     # MODE A: NetBox CE / Legacy Mode
     # Header: X-Hook-Signature
-    # Value: sha512(canonical_json)
+    # Value: sha512(pretty_printed_sorted_json)
     # ------------------------------------------------------------
     if x_hook_signature:
         try:
@@ -39,8 +39,12 @@ async def webhook(
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid JSON body")
 
-        # Canonical JSON encoding (matches NetBox CE signing)
-        canonical = json.dumps(parsed, separators=(",", ":"), sort_keys=True).encode()
+        # Reconstruct EXACTLY what NetBox CE signs internally
+        canonical = json.dumps(
+            parsed,
+            indent=4,          # NetBox CE uses pretty-printed JSON
+            sort_keys=True     # NetBox CE sorts keys before hashing
+        ).encode()
 
         expected = hashlib.sha512(canonical).hexdigest()
 
