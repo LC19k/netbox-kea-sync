@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Header, HTTPException, Request
 import hashlib
 import hmac
+import os
 
 from .settings import settings
 from .models import WebhookEvent
@@ -8,18 +9,26 @@ from .sync import sync_reservations
 
 router = APIRouter()
 
+# Optional debug toggle (set WEBHOOK_DEBUG=1 in env to enable hex dump)
+DEBUG = os.getenv("WEBHOOK_DEBUG", "0") == "1"
+
+
 @router.post("/webhook")
 async def webhook(
     request: Request,
     x_hook_signature: str = Header(None, alias="X-Hook-Signature"),
-    x_webhook_signature: str = Header(None, alias="X-Webhook-Signature")
+    x_webhook_signature: str = Header(None, alias="X-Webhook-Signature"),
 ):
-    print("HEADERS:", dict(request.headers))
+    headers = dict(request.headers)
+    print("HEADERS:", headers)
 
     raw_body = await request.body()
 
+    if DEBUG:
+        print("RAW BODY HEX:", raw_body.hex())
+
     # ------------------------------------------------------------
-    # MODE A: NetBox CE / Legacy Mode
+    # MODE A: Legacy / NetBox CE style
     # Header: X-Hook-Signature
     # Value: sha512(body)
     # ------------------------------------------------------------
@@ -30,9 +39,9 @@ async def webhook(
         return await handle_event(request)
 
     # ------------------------------------------------------------
-    # MODE B: NetBox 4.x Modern HMAC Mode
+    # MODE B: Modern HMAC mode (NetBox 4.x+)
     # Header: X-Webhook-Signature
-    # Value: sha256=<hmac>
+    # Value: sha256=<hmac(secret, body)>
     # ------------------------------------------------------------
     if x_webhook_signature:
         if not x_webhook_signature.startswith("sha256="):
@@ -43,7 +52,7 @@ async def webhook(
         expected = hmac.new(
             key=settings.webhook_secret.encode(),
             msg=raw_body,
-            digestmod=hashlib.sha256
+            digestmod=hashlib.sha256,
         ).hexdigest()
 
         if not hmac.compare_digest(sent, expected):
@@ -59,7 +68,8 @@ async def webhook(
 
 async def handle_event(request: Request):
     """Shared event handler after signature validation."""
-    event = WebhookEvent(**(await request.json()))
+    data = await request.json()
+    event = WebhookEvent(**data)
 
     if event.object_type in ["ipam.ipaddress", "ipam.prefix"]:
         await sync_reservations()
