@@ -10,7 +10,6 @@ from .sync import sync_reservations
 
 router = APIRouter()
 
-# Enable hex-dump debugging with WEBHOOK_DEBUG=1
 DEBUG = os.getenv("WEBHOOK_DEBUG", "0") == "1"
 
 
@@ -29,29 +28,50 @@ async def webhook(
         print("RAW BODY HEX:", raw_body.hex())
 
     # ------------------------------------------------------------
-    # MODE A: NetBox 2.7 Legacy Mode
-    # Header: X-Hook-Signature
-    # Value: HMAC-SHA512(secret, raw_body)
+    # LEGACY PROBE: Try all plausible NetBox-legacy variants
     # ------------------------------------------------------------
     if x_hook_signature:
-        if not settings.webhook_secret:
-            raise HTTPException(status_code=500, detail="WEBHOOK_SECRET not configured")
+        candidates = {}
 
-        expected = hmac.new(
-            key=settings.webhook_secret.encode(),
-            msg=raw_body,
-            digestmod=hashlib.sha512,
-        ).hexdigest()
+        # 1) sha512(raw_body)
+        candidates["sha512(raw_body)"] = hashlib.sha512(raw_body).hexdigest()
 
-        if not hmac.compare_digest(x_hook_signature, expected):
-            raise HTTPException(status_code=401, detail="Invalid legacy signature")
+        # 2) HMAC-SHA512(secret, raw_body) if secret present
+        if settings.webhook_secret:
+            candidates["hmac_sha512(secret, raw_body)"] = hmac.new(
+                key=settings.webhook_secret.encode(),
+                msg=raw_body,
+                digestmod=hashlib.sha512,
+            ).hexdigest()
 
-        return await handle_event(request)
+        # 3) sha512(canonical_json: sort_keys, no indent)
+        try:
+            parsed = json.loads(raw_body)
+            canonical_min = json.dumps(parsed, separators=(",", ":"), sort_keys=True).encode()
+            candidates["sha512(canonical_min)"] = hashlib.sha512(canonical_min).hexdigest()
+        except Exception:
+            pass
+
+        # 4) sha512(pretty_json: sort_keys, indent=4)
+        try:
+            parsed = json.loads(raw_body)
+            canonical_pretty = json.dumps(parsed, indent=4, sort_keys=True).encode()
+            candidates["sha512(canonical_pretty)"] = hashlib.sha512(canonical_pretty).hexdigest()
+        except Exception:
+            pass
+
+        print("LEGACY CANDIDATES:")
+        for label, digest in candidates.items():
+            print(f"  {label}: {digest}")
+            if hmac.compare_digest(x_hook_signature, digest):
+                print(f"--> MATCHED LEGACY MODE: {label}")
+                return await handle_event(request)
+
+        print("--> NO LEGACY CANDIDATE MATCHED HEADER")
+        raise HTTPException(status_code=401, detail="Invalid legacy signature")
 
     # ------------------------------------------------------------
-    # MODE B: Modern HMAC Mode (NetBox 4.x+)
-    # Header: X-Webhook-Signature
-    # Value: sha256=<hmac(secret, raw_body)>
+    # MODERN HMAC MODE (NetBox 4.x+)
     # ------------------------------------------------------------
     if x_webhook_signature:
         if not x_webhook_signature.startswith("sha256="):
@@ -70,14 +90,10 @@ async def webhook(
 
         return await handle_event(request)
 
-    # ------------------------------------------------------------
-    # MODE C: No signature at all
-    # ------------------------------------------------------------
     raise HTTPException(status_code=401, detail="Missing signature header")
 
 
 async def handle_event(request: Request):
-    """Shared event handler after signature validation."""
     data = await request.json()
     event = WebhookEvent(**data)
 
