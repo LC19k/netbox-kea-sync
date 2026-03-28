@@ -13,6 +13,14 @@ router = APIRouter()
 DEBUG = os.getenv("WEBHOOK_DEBUG", "0") == "1"
 
 
+def sha512(data):
+    return hashlib.sha512(data).hexdigest()
+
+
+def hmac512(key, data):
+    return hmac.new(key, data, hashlib.sha512).hexdigest()
+
+
 @router.post("/webhook")
 async def webhook(
     request: Request,
@@ -27,52 +35,99 @@ async def webhook(
     if DEBUG:
         print("RAW BODY HEX:", raw_body.hex())
 
-    # ------------------------------------------------------------
-    # LEGACY PROBE: Try all plausible NetBox-legacy variants
-    # ------------------------------------------------------------
+    # ============================================================
+    # MODE A — LEGACY SIGNATURE (X-Hook-Signature)
+    # ============================================================
     if x_hook_signature:
+        print("\n=== BEGIN LEGACY SIGNATURE PROBE ===")
+
         candidates = {}
 
-        # 1) sha512(raw_body)
-        candidates["sha512(raw_body)"] = hashlib.sha512(raw_body).hexdigest()
+        # --- RAW BODY VARIANTS ---
+        candidates["sha512(raw_body)"] = sha512(raw_body)
+        candidates["sha512(raw_body.strip())"] = sha512(raw_body.strip())
+        candidates["sha512(raw_body + b'\\n')"] = sha512(raw_body + b"\n")
+        candidates["sha512(raw_body CRLF)"] = sha512(raw_body.replace(b"\n", b"\r\n"))
 
-        # 2) HMAC-SHA512(secret, raw_body) if secret present
-        if settings.webhook_secret:
-            candidates["hmac_sha512(secret, raw_body)"] = hmac.new(
-                key=settings.webhook_secret.encode(),
-                msg=raw_body,
-                digestmod=hashlib.sha512,
-            ).hexdigest()
+        # --- ENCODING VARIANTS ---
+        try:
+            decoded = raw_body.decode()
+            candidates["sha512(utf8-sig)"] = sha512(decoded.encode("utf-8-sig"))
+            candidates["sha512(utf16)"] = sha512(decoded.encode("utf-16"))
+            candidates["sha512(utf16-le)"] = sha512(decoded.encode("utf-16-le"))
+            candidates["sha512(utf16-be)"] = sha512(decoded.encode("utf-16-be"))
+        except Exception:
+            pass
 
-        # 3) sha512(canonical_json: sort_keys, no indent)
+        # --- JSON VARIANTS ---
         try:
             parsed = json.loads(raw_body)
+
+            # Minified sorted
             canonical_min = json.dumps(parsed, separators=(",", ":"), sort_keys=True).encode()
-            candidates["sha512(canonical_min)"] = hashlib.sha512(canonical_min).hexdigest()
-        except Exception:
-            pass
+            candidates["sha512(canonical_min)"] = sha512(canonical_min)
 
-        # 4) sha512(pretty_json: sort_keys, indent=4)
-        try:
-            parsed = json.loads(raw_body)
+            # Pretty sorted (indent=4)
             canonical_pretty = json.dumps(parsed, indent=4, sort_keys=True).encode()
-            candidates["sha512(canonical_pretty)"] = hashlib.sha512(canonical_pretty).hexdigest()
+            candidates["sha512(canonical_pretty)"] = sha512(canonical_pretty)
+
+            # Pretty sorted (indent=2)
+            canonical_pretty2 = json.dumps(parsed, indent=2, sort_keys=True).encode()
+            candidates["sha512(canonical_pretty2)"] = sha512(canonical_pretty2)
+
+            # Pretty sorted (indent=1)
+            canonical_pretty1 = json.dumps(parsed, indent=1, sort_keys=True).encode()
+            candidates["sha512(canonical_pretty1)"] = sha512(canonical_pretty1)
+
+            # Pretty sorted (indent=0)
+            canonical_pretty0 = json.dumps(parsed, indent=0, sort_keys=True).encode()
+            candidates["sha512(canonical_pretty0)"] = sha512(canonical_pretty0)
+
+            # repr() and str()
+            candidates["sha512(repr(parsed))"] = sha512(repr(parsed).encode())
+            candidates["sha512(str(parsed))"] = sha512(str(parsed).encode())
+
         except Exception:
             pass
 
-        print("LEGACY CANDIDATES:")
+        # --- HMAC VARIANTS ---
+        if settings.webhook_secret:
+            key_utf8 = settings.webhook_secret.encode()
+            key_utf16 = settings.webhook_secret.encode("utf-16")
+            key_utf16le = settings.webhook_secret.encode("utf-16-le")
+            key_utf16be = settings.webhook_secret.encode("utf-16-be")
+
+            # Raw body HMACs
+            candidates["hmac512(secret, raw_body)"] = hmac512(key_utf8, raw_body)
+            candidates["hmac512(secret, raw_body.strip())"] = hmac512(key_utf8, raw_body.strip())
+            candidates["hmac512(secret, raw_body + b'\\n')"] = hmac512(key_utf8, raw_body + b"\n")
+            candidates["hmac512(secret, raw_body CRLF)"] = hmac512(key_utf8, raw_body.replace(b"\n", b"\r\n"))
+
+            # HMAC with alternate encodings
+            candidates["hmac512(secret_utf16, raw_body)"] = hmac512(key_utf16, raw_body)
+            candidates["hmac512(secret_utf16le, raw_body)"] = hmac512(key_utf16le, raw_body)
+            candidates["hmac512(secret_utf16be, raw_body)"] = hmac512(key_utf16be, raw_body)
+
+            # HMAC with canonical JSON
+            try:
+                candidates["hmac512(secret, canonical_min)"] = hmac512(key_utf8, canonical_min)
+                candidates["hmac512(secret, canonical_pretty)"] = hmac512(key_utf8, canonical_pretty)
+            except Exception:
+                pass
+
+        # --- LOG AND MATCH ---
         for label, digest in candidates.items():
-            print(f"  {label}: {digest}")
+            print(f"{label}: {digest}")
             if hmac.compare_digest(x_hook_signature, digest):
-                print(f"--> MATCHED LEGACY MODE: {label}")
+                print(f"\n--> MATCHED LEGACY MODE: {label}\n")
                 return await handle_event(request)
 
-        print("--> NO LEGACY CANDIDATE MATCHED HEADER")
+        print("\n--> NO LEGACY CANDIDATE MATCHED HEADER\n")
         raise HTTPException(status_code=401, detail="Invalid legacy signature")
 
-    # ------------------------------------------------------------
-    # MODERN HMAC MODE (NetBox 4.x+)
-    # ------------------------------------------------------------
+    # ============================================================
+    # MODE B — MODERN SIGNATURE (X-Webhook-Signature)
+    # ============================================================
     if x_webhook_signature:
         if not x_webhook_signature.startswith("sha256="):
             raise HTTPException(status_code=401, detail="Invalid signature format")
@@ -90,6 +145,9 @@ async def webhook(
 
         return await handle_event(request)
 
+    # ============================================================
+    # NO SIGNATURE PROVIDED
+    # ============================================================
     raise HTTPException(status_code=401, detail="Missing signature header")
 
 
