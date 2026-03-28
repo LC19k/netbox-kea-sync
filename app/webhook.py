@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Header, HTTPException, Request
 import hashlib
 import hmac
-import os
 import json
+import os
 
 from .settings import settings
 from .models import WebhookEvent
@@ -10,8 +10,14 @@ from .sync import sync_reservations
 
 router = APIRouter()
 
-DEBUG = os.getenv("WEBHOOK_DEBUG", "0") == "1"
+# ============================================================
+# STARTUP SECRET CHECK
+# ============================================================
+print("=== STARTUP SECRET CHECK ===")
+print(f"WEBHOOK_SECRET (len={len(settings.webhook_secret)}): {repr(settings.webhook_secret)}")
+print("=== END SECRET CHECK ===")
 
+DEBUG = os.getenv("WEBHOOK_DEBUG", "0") == "1"
 
 @router.post("/webhook")
 async def webhook(
