@@ -3,7 +3,7 @@ netbox:
   token: "${NETBOX_TOKEN}"
 
 kea:
-  url: "http://kea-ctrl-agent:8000"
+  url: "${KEA_URL}"
 
 webhook:
   secret: "${WEBHOOK_SECRET}"
