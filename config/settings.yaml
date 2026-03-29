@@ -1,5 +1,5 @@
 netbox:
-  url: "http://netbox:8000"
+  url: "${NETBOX_URL}"
   token: "${NETBOX_TOKEN}"
 
 kea:
